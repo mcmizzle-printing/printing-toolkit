@@ -283,3 +283,36 @@ def find_drawings(img, min_px=20000):
         c0, c1 = sl[1].start, sl[1].stop
         out.append((c0, r0, c1, r1))
     return sorted(out)
+
+# ---------- measure ----------
+
+def region_widths(labels, floor_px=None):
+    """Widest circle that fits inside each labelled region, in PIXELS.
+
+    Returns {label: width}. Unit-free on purpose -- the caller knows its own
+    scale, and a shared library has no business deciding what is too small.
+
+    This exists because a region can be perfectly well-formed and still be
+    unmanufacturable: in a multi-material part, a sliver narrower than the
+    process can lay down simply is not there, and the usual repair -- merging it
+    into a neighbour -- removes it SILENTLY. Nothing downstream notices, because
+    the mesh that results is completely valid. Measure the regions before you
+    trust them.
+
+    Area is the wrong test and a tempting one. A long thin region can have plenty
+    of area and no width at all; an area filter set from a typical piece's size
+    will delete narrow pieces that were perfectly printable and keep slivers that
+    are not. Width is what the process actually limits.
+
+    With `floor_px`, returns only the regions below it -- the failures.
+    """
+    out = {}
+    for v in np.unique(labels):
+        if v == 0:
+            continue
+        m = labels == v
+        # the distance transform's peak is the inscribed radius; double it
+        w = 2.0 * ndimage.distance_transform_edt(m).max()
+        if floor_px is None or w < floor_px:
+            out[int(v)] = float(w)
+    return out
