@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store
+
+# Working notes for whoever is editing this — deliberately not published.
+# The pre-publication history, including these, lives in the private
+# printing-toolkit-archive repo.
+CLAUDE.md
+CLAUDE.local.md

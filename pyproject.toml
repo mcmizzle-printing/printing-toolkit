@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "printing-toolkit"
+version = "0.1.0"
+description = "Shared Python geometry/STL toolkit for 3D-printing projects (no CAD)"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "numpy",
+    "Pillow",
+    # scipy is only used by tests/islands.py, for ndimage.label. It is not
+    # optional: the pure-Python flood fill it replaces ran 50 minutes on one
+    # 816k-triangle frame without finishing, which made the check unusable at
+    # plate scale exactly where it was most needed.
+    "scipy",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["mesh", "icons", "stroke2fill", "detent", "seamjoint", "rib3", "bowtie",
+              "linetrace"]
