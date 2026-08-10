@@ -95,6 +95,65 @@ def write_profile(cfg, path, **overrides):
     return path
 
 
+# Bambu Studio's CLI crashes intermittently in
+# Slic3r::convert_filament_preset_name while parsing --load-filaments, BEFORE
+# slicing starts, leaving no result.json and no gcode.
+#
+# Diagnosed 2026-08-10 from two macOS crash reports on BambuStudio 02.07.01.62,
+# arm64: identical stack every time --
+#
+#     _platform_memmove
+#     std::basic_string::basic_string(const&)
+#     Slic3r::convert_filament_preset_name(std::string&, std::string&)
+#     Slic3r::CLI::run(int, char**)
+#
+# EXC_BAD_ACCESS, KERN_INVALID_ADDRESS at 0x0. Same code path, different signals
+# across runs (SIGSEGV and SIGBUS observed back to back), which is the signature
+# of an UNINITIALISED READ rather than a race in the caller. Roughly 1 run in 4
+# on the multi-filament path; the single-filament path is far less exposed.
+#
+# Nothing in the config prevents it. `filament_settings_id` arrives as [''] and
+# looked like the culprit; setting it to the preset name made no difference
+# across trials. Treat it as an upstream defect.
+#
+# A crash is distinguishable from a real failure BY THE RETURN CODE: negative
+# means killed by a signal. Retry those and only those. A non-negative exit with
+# no output is a genuine error -- a bad profile, an unsliceable model -- and must
+# be reported rather than retried, or this helper becomes the thing that hides
+# real breakage.
+CRASH_RETRIES = 5
+
+
+def run_slice(cmd, gcode_path, cwd=None, retries=CRASH_RETRIES, log=None):
+    """Run the Bambu CLI until it emits `gcode_path`, retrying ONLY crashes.
+
+    Returns (proc, attempts). Raises SystemExit, carrying the slicer's own
+    output, if the CLI exits cleanly without producing anything -- that is a
+    real failure and is not retried.
+    """
+    for attempt in range(1, retries + 1):
+        if os.path.exists(gcode_path):
+            os.remove(gcode_path)
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+        if os.path.exists(gcode_path):
+            return proc, attempt
+        if proc.returncode < 0:
+            if log:
+                log(f"    Bambu CLI crashed (signal {-proc.returncode}) in "
+                    f"convert_filament_preset_name -- upstream, retrying "
+                    f"({attempt}/{retries})")
+            continue
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+        raise SystemExit(
+            f"slicer exited {proc.returncode} without producing "
+            f"{os.path.basename(gcode_path)}\n    " +
+            ("  ".join(tail) or "(slicer produced no output)"))
+    raise SystemExit(
+        f"Bambu CLI crashed {retries} times running the same command. That is "
+        f"far above the ~1-in-4 rate of the known upstream segfault, so treat "
+        f"it as a real problem rather than the usual flake.")
+
+
 def slice_one(stl, workdir, layer, infill, supports):
     machine  = flatten("machine",  MACHINE)
     process  = flatten("process",  PROCESS)
