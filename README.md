@@ -13,7 +13,7 @@ Consuming project repos install it editable and import from it directly.
 
 | | |
 |---|---|
-| `src/` | the primitives: `mesh`, `icons`, `stroke2fill`, `detent`, `seamjoint`, `rib3`, `bowtie` |
+| `src/` | the primitives: `mesh`, `icons`, `stroke2fill`, `detent`, `seamjoint`, `rib3`, `bowtie`, `linetrace` |
 | `tests/` | `check_all.py` (watertight + on-bed), `islands.py` (islands + cantilevers), `slicecheck.py` (headless Bambu slice), `render.py` (STL → PNG) — run against a consuming project's `out/*.stl` |
 
 ---
@@ -76,6 +76,7 @@ Dependencies (`numpy`, `Pillow`) are declared there too and come in with the edi
 | `detent.py` | Printable snap retention: `local_bulge` (push a run of polygon vertices outward/inward along their normal — the nipple/dimple primitive), `detent_sites`, `resample` |
 | `seamjoint.py` | `splice_dovetails` — inserts dovetail tail/socket features into a polygon outline where it runs along a seam line |
 | `rib3.py` | A half-dovetail seam profile (square shelf, undercut only on top): `spans(depth)` builds the pair at any undercut depth; `channel_span`/`rail_span` and the z-height constants are that factory at the shipping depth. **Its male rail cannot print unsupported** — see below |
+| `linetrace.py` | Scanned line art → printable strokes: `thin` (ink mask to a 1-px skeleton), `prune`, `polylines`, `resample_run`, `smooth_run` (blur a stroke *along its own length*, so the shape stays where it was drawn and only the wobble goes), and `region_widths` (largest inscribed circle per region — the width test that an area filter gets wrong). Knows nothing about panes or tiles; the registration and clipping live in the consuming project |
 | `bowtie.py` | Butterfly key: a two-flank dovetail carried by a *separate* part, so both panels get sockets only and nothing protrudes into air. `profile()` returns key/socket half-widths by height plus the derived x ranges; `wall()` reports material left outboard. Profile math only — the caller meshes it, same split as `rib3` |
 
 `tests/` — standalone scripts, run directly against a consuming project's `out/*.stl`, not
@@ -85,8 +86,37 @@ installed as part of the package:
 |---|---|
 | `check_all.py` | Watertight (odd-count edge check) + on-bed (P2S 256×256, AMS cutter exclusion) audit over a glob of STLs. `python3 check_all.py [paths...]`, defaults to `out/*.stl` in the caller's cwd |
 | `islands.py` | Layer-by-layer printability: **islands** (a region with nothing beneath it and no connection to anything supported — it detaches) and **cantilevers** (a region joined sideways to supported material but reaching out over nothing — it droops). `python3 islands.py [paths...] [--reach MM] [--res MM]`, same default. Catches "material starting in mid-air," which watertight and on-bed both miss |
-| `slicecheck.py` | Headless Bambu Studio slice with supports forced **off**, reporting Bambu's own floating-region warning and overhang-perimeter share of extrusion time. `python3 slicecheck.py [paths...] [--layer MM] [--infill PCT] [--supports]`, same default. macOS-only, needs Bambu Studio installed; the P2S/PETG profile names and thresholds are constants at the top of the file |
+| `slicecheck.py` | Headless Bambu Studio slice with supports forced **off**, reporting Bambu's own floating-region warning and overhang-perimeter share of extrusion time. `python3 slicecheck.py [paths...] [--layer MM] [--infill PCT] [--supports]`, same default. macOS-only, needs Bambu Studio installed; the P2S/PETG profile names and thresholds are constants at the top of the file. Also exports **`run_slice`** and **`flatten`**/**`write_profile`** for consumers driving the CLI themselves — see below |
 | `render.py` | STL → PNG, so geometry can be *looked at* rather than only reasoned about. `--views iso,top,front,right`, or `--focus X,Y,Z --dist MM` to point the camera at one feature — a 3 mm socket in a 228 mm plate is invisible in an overview. Needs `brew install f3d`. Not a check: nothing it produces passes or fails, but two defects on this project were caught by drawing a cross-section and none by a number |
+
+---
+
+## Two things about driving Bambu Studio's CLI
+
+Both cost real time to find, and both bite any project that slices headlessly.
+
+**It does not resolve a profile's `inherits` chain.** Hand the CLI a stock profile stub like
+`0.12mm High Quality @BBL P2S.json` and it silently falls back to the **0.20 mm default** — no
+warning, no error, just the wrong layer height. `flatten()` resolves the chain and
+`write_profile()` writes the merged result; that is the only reason `slicecheck.py` exists rather
+than being one line of shell. The CLI also takes whole JSON files only — there is no per-key
+override, no `--layer-height`.
+
+**It segfaults intermittently while parsing `--load-filaments`.** Confirmed on
+BambuStudio **02.07.01.62** (macOS, arm64) from crash reports: identical stack every time —
+`convert_filament_preset_name` → `basic_string` copy → `_platform_memmove`, EXC_BAD_ACCESS
+reading address 0 — but *different signals* across runs (SIGSEGV and SIGBUS back to back), which
+is an uninitialised read rather than a race in the caller. Roughly **1 run in 4** on the
+multi-filament path; the single-filament path is far less exposed. Nothing in the config prevents
+it.
+
+**`run_slice(cmd, gcode_path, cwd=, retries=, log=)`** handles it: it retries on a **negative
+return code** — killed by a signal — and *only* that. A non-negative exit with no output is a
+real failure and is raised with the slicer's own last lines, never retried, so the helper cannot
+become the thing that hides genuine breakage. It returns `(proc, attempts)` so callers can report
+that a retry happened instead of smoothing it away.
+
+If you drive the CLI directly for multi-filament work, use it.
 
 ---
 

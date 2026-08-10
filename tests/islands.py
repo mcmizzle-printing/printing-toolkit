@@ -121,10 +121,12 @@ def analyse(path, res=0.35, layer=0.12, zmax=None, reach=REACH_MM):
         # A part's LOWEST layer is its seating surface, never an island -- it rests
         # on the bed, or on whatever it is stacked on. Only the first *sampled*
         # layer used to be skipped, which covered parts starting at z=0 and nothing
-        # else: the medallion's six colour levels are authored in place in one
-        # stack (rays start at 2.60, on top of the body, in a different file), so
-        # checked alone every ray read as floating and MED-2 reported 47 islands
-        # that do not exist. Note this skips only the first layer with material --
+        # else: a multi-part colour stack is authored in place across several
+        # files, so an upper level starts partway up z with its support living in
+        # a DIFFERENT file. Checked alone, every feature in it reads as floating --
+        # one such level reported 47 islands that do not exist. Merge the levels
+        # before believing an island result. Note this skips only the first layer
+        # with material --
         # if material reappears after a genuine gap, that is still an island.
         if prev is not None and seen_material:
             lbl=label(cur)
