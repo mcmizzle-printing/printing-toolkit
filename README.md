@@ -85,9 +85,42 @@ installed as part of the package:
 | Script | What it does |
 |---|---|
 | `check_all.py` | Watertight (odd-count edge check) + on-bed (P2S 256×256, AMS cutter exclusion) audit over a glob of STLs. `python3 check_all.py [paths...]`, defaults to `out/*.stl` in the caller's cwd |
-| `islands.py` | Layer-by-layer printability: **islands** (a region with nothing beneath it and no connection to anything supported — it detaches) and **cantilevers** (a region joined sideways to supported material but reaching out over nothing — it droops). `python3 islands.py [paths...] [--reach MM] [--res MM]`, same default. Catches "material starting in mid-air," which watertight and on-bed both miss |
+| `islands.py` | Layer-by-layer printability: **islands** (a region with nothing beneath it and no connection to anything supported — it detaches) and **cantilevers** (a region joined sideways to supported material but reaching out over nothing — it droops). `python3 islands.py [paths...] [--reach MM] [--res MM]`, same default. Catches "material starting in mid-air," which watertight and on-bed both miss. **Prismatic geometry only — see the limitation below before relying on it** |
 | `slicecheck.py` | Headless Bambu Studio slice with supports forced **off**, reporting Bambu's own floating-region warning and overhang-perimeter share of extrusion time. `python3 slicecheck.py [paths...] [--layer MM] [--infill PCT] [--supports]`, same default. macOS-only, needs Bambu Studio installed; the P2S/PETG profile names and thresholds are constants at the top of the file. Also exports **`run_slice`** and **`flatten`**/**`write_profile`** for consumers driving the CLI themselves — see below |
 | `render.py` | STL → PNG, so geometry can be *looked at* rather than only reasoned about. `--views iso,top,front,right`, or `--focus X,Y,Z --dist MM` to point the camera at one feature — a 3 mm socket in a 228 mm plate is invisible in an overview. Needs `brew install f3d`. Not a check: nothing it produces passes or fails, but two defects on this project were caught by drawing a cross-section and none by a number |
+
+---
+
+## `islands.py` cannot see curved geometry
+
+**It reports curved overhangs as clean.** Not as an error — as a pass. Found 2026-08-10 while
+adding a printability check to `peggify`, whose hook geometry is entirely cylinders and spheres.
+Tracked in [#1](https://github.com/mcmizzle-printing/printing-toolkit/issues/1).
+
+Two parts, each an 8×8×20 mm pillar seated on the bed with a branch springing sideways at
+z = 5 mm and reaching 12 mm over open air. Only the branch geometry differs:
+
+```
+branch_box.stl    <-- 1 cantilever(s)          # box shelf: caught
+branch_rod.stl    clean   (worst reach 0.00 mm) # cylindrical rod: missed
+```
+
+The occupancy mask is built by ray-casting through *perfectly horizontal* cap triangles only. A
+horizontal cylinder has no perfectly horizontal side facet — a side quad spans angles `t1` and
+`t2`, and its z values are `r·sin(t1)` and `r·sin(t2)`, equal only in the degenerate case — so the
+rod contributes no caps, never enters the mask, and the scan looks straight through it. The same
+applies to spheres, fillets, bosses and chamfered edges.
+
+This is structural, not resolution: `--res 0.35`, `0.20` and `0.12` all report clean. Dropping
+`--res` is the documented remedy for thin features and **will not help here.**
+
+So: extruded prisms bounded by flat top and bottom caps — which is nearly all of `faith-window` —
+are checked correctly. Anything curved is not checked at all. Until #1 is fixed, treat a clean
+`islands.py` result on curved geometry as *no information*, and verify it another way.
+
+`peggify` carries a voxel-based support scan (`peggify/validate.py`) that gets both parts above
+right and does not care how the surface is tessellated. Whether that moves in here is part of #1 —
+it needs a mesh library the toolkit does not currently depend on.
 
 ---
 
@@ -131,4 +164,12 @@ editable installs won't survive that on their own.
 
 ## Current consumers
 
-- `faith-window` — the only one so far
+- `faith-window` — the original, and the project this was split out of. Extruded prism geometry
+  built with `mesh`/`icons`/`detent`/`seamjoint`/`bowtie`/`linetrace`.
+- `peggify` — converts wall-mount STL models to pegboard-mount. Uses the **verification scripts
+  only**, not `src/`: its geometry is built with `trimesh` and `manifold3d` rather than this
+  toolkit's primitives, so the shared value is the checks. Note that `islands.py` cannot currently
+  see its geometry at all — see the limitation above.
+
+A second consumer means the versioning note above is now live rather than hypothetical: two
+projects pin nothing and both depend on a local sibling checkout being present and current.
