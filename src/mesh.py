@@ -115,10 +115,25 @@ def write_stl(path, faces):
             f.write(b'\0\0')
 
 def offset_poly(poly, d):
-    """Offset a polygon inward by d. Miter joins with a bevel fallback."""
+    """Offset a polygon: d POSITIVE shrinks it, d NEGATIVE grows it.
+
+    Miter joins with a bevel fallback. The winding of `poly` does not matter --
+    both normal directions are tried and the one that moves the requested way is
+    kept, which is why a caller never has to know how its polygon is wound.
+
+    THE SIGN USED TO BE IGNORED AND IT ALWAYS SHRANK. Every offset in either
+    repo happened to be an inset, so nothing noticed until a caller asked for a
+    grow -- to keep a border of one colour around a hole. Passing -1.9 shrank the
+    hole by 1.9 instead of growing it, so the border became a 1.9 mm overlap that
+    would have plugged every tile pocket in the window.
+
+    NO CHECK DOWNSTREAM COULD HAVE SEEN IT: the result is watertight, on the bed,
+    island- and cantilever-free, slices clean and is the right colour. It is
+    simply the wrong size, in the direction that makes parts not fit.
+    """
     n=len(poly)
     if n<3: return poly
-    a0=abs(area(poly))
+    a0=abs(area(poly)); grow = d < 0; d = abs(d)
     best=None
     for sgn in (1.0,-1.0):
         out=[]
@@ -135,9 +150,60 @@ def offset_poly(poly, d):
             cosh=max(0.2, (n1[0]*bx+n1[1]*by))     # miter limit
             out.append((p1[0]+bx*d/cosh, p1[1]+by*d/cosh))
         aa=abs(area(out))
-        if aa<a0 and (best is None or aa>abs(area(best))):
+        ok     = (aa > a0) if grow else (aa < a0)
+        better = best is None or ((aa < abs(area(best))) if grow
+                                  else (aa > abs(area(best))))
+        if ok and better:
             best=out
     return best if best else poly
+
+
+def grow_poly(poly, d, keep=0.80):
+    """Grow a polygon outward by d, WITHOUT the self-intersection loops that
+    plain vertex offsetting produces at concave corners.
+
+    Why this exists rather than just offset_poly(poly, -d): moving every vertex
+    along its bisector is only valid while neighbouring offsets do not cross.
+    Grow a scalloped or notched outline and each concave valley folds through
+    itself, leaving a loop that points back INSIDE the original -- so the result
+    reads as "grown" by area while locally reaching inward. Measured on this
+    project's gable pane: a 1.9 mm grow reached 1.60 mm *into* the shape.
+
+    The fix uses the one thing that is true of a correct outward offset: every
+    point of it is exactly d from the source outline. Loop points are nearer, so
+    they are dropped. `poly` should be reasonably densely sampled (resample() it)
+    -- then a fold is a short run of points and deleting it stitches the two
+    good neighbours together.
+
+    `keep` is the fraction of d a point must clear to survive; below ~0.5 folds
+    start to slip through, above ~0.95 legitimate miters get cut.
+    """
+    if len(poly) < 3:
+        return poly
+    out = offset_poly(poly, -abs(d))
+    lim = abs(d) * keep
+    good = [p for p in out if _dist_to_ring(p, poly) >= lim and not _in_ring(p, poly)]
+    return good if len(good) >= 3 else out
+
+
+def _dist_to_ring(pt, ring):
+    x, y = pt[0], pt[1]; best = float("inf")
+    for i in range(len(ring)):
+        ax, ay = ring[i]; bx, by = ring[(i + 1) % len(ring)]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L <= 0 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / L))
+        best = min(best, math.hypot(x - ax - t * dx, y - ay - t * dy))
+    return best
+
+
+def _in_ring(pt, ring):
+    x, y = pt[0], pt[1]; c = False
+    for i in range(len(ring)):
+        x1, y1 = ring[i]; x2, y2 = ring[(i + 1) % len(ring)]
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            c = not c
+    return c
 
 def band_prisms(outer, holes, z0, z1, step=0.15):
     """Scanline decomposition: the region becomes a stack of exact-width boxes.
