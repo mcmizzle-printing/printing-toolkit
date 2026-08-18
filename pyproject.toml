@@ -22,4 +22,4 @@ dependencies = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = ["mesh", "icons", "stroke2fill", "detent", "seamjoint", "rib3", "bowtie",
-              "linetrace"]
+              "linetrace", "refill"]
